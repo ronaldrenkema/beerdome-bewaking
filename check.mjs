@@ -14,8 +14,14 @@ async function get(url, opts = {}) {
   finally { clearTimeout(t); }
 }
 
+// SiteGround geeft datacenter-IP's (zoals GitHub) soms een botcontrole: HTTP 202 + sgcaptcha.
+// Echte bezoekers zien die niet; dat is dus geen storing, alleen "nu niet te controleren".
+class BotControle extends Error {}
+function botCheck(naam, r) { if (r.status === 202) throw new BotControle(`${naam}: botcontrole SiteGround (HTTP 202)`); }
+
 async function pagina(naam, url, moetBevatten, cookie) {
   const r = await get(url, cookie ? { headers: { Cookie: cookie } } : {});
+  botCheck(naam, r);
   if (r.status !== 200) throw new Error(`${naam}: HTTP ${r.status}`);
   const html = await r.text();
   if (!html.includes(moetBevatten)) throw new Error(`${naam}: pagina laadt, maar "${moetBevatten}" ontbreekt`);
@@ -23,6 +29,7 @@ async function pagina(naam, url, moetBevatten, cookie) {
 
 async function winkelwagen() {
   const pr = await get(`${SITE}/wp-json/wc/store/v1/products?per_page=20&stock_status=instock&type=simple`);
+  botCheck('Winkel-API', pr);
   const prods = await pr.json().catch(() => { throw new Error(`Winkel-API geeft geen productlijst (HTTP ${pr.status})`); });
   const prod = Array.isArray(prods) && prods.find(p => p.is_purchasable && p.add_to_cart?.minimum <= 1);
   if (!prod) throw new Error('Winkel-API: geen koopbaar product gevonden');
@@ -46,13 +53,14 @@ async function winkelwagen() {
   await pagina('Afrekenpagina', `${SITE}/nl/afrekenen/`, 'wp-block-woocommerce-checkout', koek());
 }
 
+let botcontrole = false;
 async function rondje() {
-  const fouten = [];
+  const fouten = []; botcontrole = false;
   for (const [naam, fn] of [
     ['Homepage', () => pagina('Homepage', `${SITE}/nl/`, 'Beerdome')],
     ['Winkelwagen en afrekenen', winkelwagen],
   ]) {
-    try { await fn(); } catch (e) { fouten.push(e.name === 'AbortError' ? `${naam}: geen antwoord binnen 30 s` : e.message); }
+    try { await fn(); } catch (e) { if (e instanceof BotControle) { botcontrole = true; console.log(e.message); continue; } fouten.push(e.name === 'AbortError' ? `${naam}: geen antwoord binnen 30 s` : e.message); }
   }
   return fouten;
 }
@@ -72,7 +80,7 @@ if (fouten.length) {                       // tweede poging na een minuut: geen 
 }
 const nu = new Date().toISOString();
 const stuk = fouten.length > 0;
-console.log(stuk ? `STORING: ${fouten.join(' | ')}` : 'Alles werkt');
+console.log(stuk ? `STORING: ${fouten.join(' | ')}` : botcontrole ? 'Geen storing gevonden (deels botcontrole, niet te controleren)' : 'Alles werkt');
 
 if (stuk && !vorig.stuk) await push('Beerdome: storing', fouten.join('\n'), 'urgent', 'rotating_light');
 else if (stuk && vorig.stuk && Date.now() - Date.parse(vorig.laatsteMelding) > 2 * 3600e3)
