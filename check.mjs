@@ -6,18 +6,20 @@ const SITE = process.env.SITE || 'https://www.beerdome.nl';
 const TOPIC = process.env.NTFY_TOPIC;          // geheime topicnaam, als GitHub-secret
 const STATE = 'state/status.json';
 const DRY = process.argv.includes('--droog');  // lokaal testen zonder pushmelding
-const UA = 'Mozilla/5.0 (Beerdome-bewaking; +https://www.beerdome.nl)';
+// gewone browser-UA: SiteGround geeft afwijkende UA's vanaf datacenter-IP's eerder een botcontrole
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36';
+const BROWSER = { 'User-Agent': UA, 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8', 'Accept-Language': 'nl-NL,nl;q=0.9,en;q=0.8' };
 
 async function get(url, opts = {}) {
   const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 30000);
-  try { return await fetch(url, { ...opts, signal: ctl.signal, headers: { 'User-Agent': UA, ...(opts.headers || {}) } }); }
+  try { return await fetch(url, { ...opts, signal: ctl.signal, headers: { ...BROWSER, ...(opts.headers || {}) } }); }
   finally { clearTimeout(t); }
 }
 
 // SiteGround geeft datacenter-IP's (zoals GitHub) soms een botcontrole: HTTP 202 + sgcaptcha.
 // Echte bezoekers zien die niet; dat is dus geen storing, alleen "nu niet te controleren".
 class BotControle extends Error {}
-function botCheck(naam, r) { if (r.status === 202) throw new BotControle(`${naam}: botcontrole SiteGround (HTTP 202)`); }
+function botCheck(naam, r) { if (r.status === 202) { console.log(`${naam} 202-headers:`, JSON.stringify(Object.fromEntries(r.headers))); throw new BotControle(`${naam}: botcontrole SiteGround (HTTP 202)`); } }
 
 async function pagina(naam, url, moetBevatten, cookie) {
   const r = await get(url, cookie ? { headers: { Cookie: cookie } } : {});
